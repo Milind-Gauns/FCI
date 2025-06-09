@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 # ————————————————————————————————
+# Must be the first Streamlit command
+# ————————————————————————————————
+st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
+
+# ————————————————————————————————
 # 1. Load & Cache Data
 # ————————————————————————————————
 @st.cache_data
@@ -20,7 +25,7 @@ def load_data(fn):
     fps          = pd.read_excel(fn, sheet_name="FPS")
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-DATA_FILE = "distribution_dashboard_template.xlsx"
+DATA_FILE = "distribution_dashboard_output.xlsx"
 settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data(DATA_FILE)
 
 # ————————————————————————————————
@@ -32,8 +37,7 @@ MAX_TRIPS = int(settings.query("Parameter=='Vehicles_Total'")["Value"].iloc[0]) 
             int(settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0])
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
-# For predispatch slider range
-# Compute X as max over cumulative need vs capacity
+# Pre-dispatch offset X for slider range
 daily_total_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum()
 cum_need = 0
 adv = []
@@ -63,7 +67,7 @@ veh_usage = (
 )
 veh_usage["Max_Trips"] = MAX_TRIPS
 
-# LG stock over time
+# LG stock timeline
 lg_stock = (
     stock_levels[stock_levels.Entity_Type=="LG"]
     .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")
@@ -73,8 +77,7 @@ lg_stock = (
 # FPS stock & at-risk
 fps_stock = (
     stock_levels[stock_levels.Entity_Type=="FPS"]
-    .merge(fps[["FPS_ID","Reorder_Threshold_tons"]],
-           left_on="Entity_ID", right_on="FPS_ID")
+    .merge(fps[["FPS_ID","Reorder_Threshold_tons"]], left_on="Entity_ID", right_on="FPS_ID")
 )
 fps_stock["At_Risk"] = fps_stock.Stock_Level_tons <= fps_stock.Reorder_Threshold_tons
 
@@ -84,13 +87,12 @@ total_plan = day_totals_lg.Quantity_tons.sum()
 # ————————————————————————————————
 # 3. Layout & Filters
 # ————————————————————————————————
-st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
 st.title("🚛 Grain Distribution Dashboard")
 
 with st.sidebar:
     st.header("Filters")
     day_range = st.slider(
-        "Dispatch Window (including pre-days)", 
+        "Dispatch Window (days)", 
         min_value=MIN_DAY, max_value=MAX_DAY,
         value=(MIN_DAY, MAX_DAY),
         format="%d"
@@ -118,7 +120,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 ])
 
 # ————————————————————————————————
-# 4. Tab1: CG→LG Overview
+# 4. CG→LG Overview
 # ————————————————————————————————
 with tab1:
     st.subheader("CG → LG Dispatch")
@@ -128,7 +130,7 @@ with tab1:
     st.plotly_chart(fig1, use_container_width=True)
 
 # ————————————————————————————————
-# 5. Tab2: LG→FPS Overview
+# 5. LG→FPS Overview
 # ————————————————————————————————
 with tab2:
     st.subheader("LG → FPS Dispatch")
@@ -138,10 +140,10 @@ with tab2:
     st.plotly_chart(fig2, use_container_width=True)
 
 # ————————————————————————————————
-# 6. Tab3: FPS Report
+# 6. FPS Report
 # ————————————————————————————————
 with tab3:
-    st.subheader("FPS‐wise Dispatch Details")
+    st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=1 & Day<=@day_range[1]")
     report = (
         fps_df.groupby("FPS_ID")
@@ -157,20 +159,16 @@ with tab3:
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————
-# 7. Tab4: FPS At-Risk
+# 7. FPS At-Risk
 # ————————————————————————————————
 with tab4:
     st.subheader("FPS At-Risk List")
-    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")
-    arf = arf[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
+    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
     st.dataframe(arf, use_container_width=True)
-    st.download_button("Download At-Risk List (Excel)", 
-                       arf.to_excel(index=False), 
-                       "fps_at_risk.xlsx", 
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("Download At-Risk (Excel)", arf.to_excel(index=False), "fps_at_risk.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 8. Tab5: FPS Data
+# 8. FPS Data
 # ————————————————————————————————
 with tab5:
     st.subheader("FPS Stock & Upcoming Receipts")
@@ -191,13 +189,10 @@ with tab5:
         })
     fps_data_df = pd.DataFrame(fps_data)
     st.dataframe(fps_data_df, use_container_width=True)
-    st.download_button("Download FPS Data (Excel)", 
-                       fps_data_df.to_excel(index=False), 
-                       "fps_data.xlsx", 
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("Download FPS Data (Excel)", fps_data_df.to_excel(index=False), "fps_data.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 9. Tab6: Downloads (Excel & PDF)
+# 9. Downloads
 # ————————————————————————————————
 def to_excel(df):
     buf = BytesIO()
@@ -205,12 +200,9 @@ def to_excel(df):
     return buf.getvalue()
 
 with tab6:
-    st.subheader("Download Reports")
-    st.download_button("Download FPS Report (Excel)", 
-                       to_excel(report), 
-                       f"FPS_Report_{1}_to_{day_range[1]}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    # PDF export
+    st.subheader("Download FPS Report")
+    st.download_button("Excel", to_excel(report), f"FPS_Report_{1}_to_{day_range[1]}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    # PDF
     pdf_buf = BytesIO()
     with PdfPages(pdf_buf) as pdf:
         fig, ax = plt.subplots(figsize=(8, len(report)*0.3 + 1))
@@ -219,13 +211,10 @@ with tab6:
         tbl.auto_set_font_size(False)
         tbl.set_fontsize(10)
         pdf.savefig(fig, bbox_inches='tight')
-    st.download_button("Download FPS Report (PDF)", 
-                       pdf_buf.getvalue(), 
-                       f"FPS_Report_{1}_to_{day_range[1]}.pdf",
-                       mime="application/pdf")
+    st.download_button("PDF", pdf_buf.getvalue(), f"FPS_Report_{1}_to_{day_range[1]}.pdf", mime="application/pdf")
 
 # ————————————————————————————————
-# 10. Tab7: Metrics
+# 10. Metrics
 # ————————————————————————————————
 with tab7:
     st.subheader("Key Performance Indicators")

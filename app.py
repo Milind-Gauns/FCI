@@ -137,31 +137,43 @@ with col6:
     st.metric("Trips per Ton", f"{t_per_ton:.4f}")
 
 # ————————————————————————————————
-# 7. Sankey Flow Diagram
+# 7. Sankey Flow Diagram (fixed)
 # ————————————————————————————————
-st.subheader("Flow Sankey: CG→LG→FPS")
-# Build nodes and links
-lg_nodes = cg_lg_flow.LG_ID.astype(str).tolist()
-fps_nodes = lg_fps_flow.FPS_ID.astype(str).tolist()
-nodes = ["CG"] + lg_nodes + fps_nodes
+import plotly.graph_objects as go
 
-# Map indexes
-idx = {node:i for i,node in enumerate(nodes)}
+st.subheader("Flow Sankey: CG → LG → FPS")
 
-# Links CG→LG
+# 1) Unique ordered node lists
+lg_nodes  = cg_lg_flow["LG_ID"].astype(str).unique().tolist()
+fps_nodes = lg_fps_flow["FPS_ID"].astype(str).unique().tolist()
+nodes     = ["CG"] + lg_nodes + fps_nodes
+
+# 2) Build index mapping
+idx = {node: i for i, node in enumerate(nodes)}
+
+# 3) Links from CG → LG
 links = []
 for _, row in cg_lg_flow.iterrows():
-    links.append(dict(source=idx["CG"],
-                      target=idx[str(row.LG_ID)],
-                      value=row.Quantity_tons))
-# Links LG→FPS
-for _, row in lg_fps_flow.iterrows():
-    links.append(dict(source=idx[str(row.LG_ID)],
-                      target=idx[str(row.FPS_ID)],
-                      value=row.Quantity_tons))
+    lg_str = str(int(row.LG_ID))
+    links.append(dict(
+        source=idx["CG"],
+        target=idx[lg_str],
+        value=row.Quantity_tons
+    ))
 
+# 4) Links from LG → FPS
+for _, row in lg_fps_flow.iterrows():
+    lg_str  = str(int(row.LG_ID))
+    fps_str = str(int(row.FPS_ID))
+    links.append(dict(
+        source=idx[lg_str],
+        target=idx[fps_str],
+        value=row.Quantity_tons
+    ))
+
+# 5) Draw the diagram
 fig_sankey = go.Figure(go.Sankey(
-    node=dict(label=nodes, pad=15),
+    node=dict(label=nodes, pad=15, thickness=20),
     link=links
 ))
 st.plotly_chart(fig_sankey, use_container_width=True)

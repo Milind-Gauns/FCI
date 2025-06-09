@@ -165,16 +165,23 @@ with tab4:
 # ————————————————————————————————
 # 10. FPS Data
 # ————————————————————————————————
+# ————————————————————————————————
+# 10. FPS Data (corrected)
+# ————————————————————————————————
 with tab5:
     st.subheader("FPS Stock & Upcoming Receipts")
     end_day = min(day_range[1], DAYS)
     fps_data = []
     for fps_id in fps.FPS_ID:
-        stock_now = fps_stock.query("FPS_ID==@fps_id & Day==@end_day")["Stock_Level_tons"]
-        stock_now = float(stock_now) if not stock_now.empty else 0.0
-        future_days = dispatch_lg.query("FPS_ID==@fps_id & Day>@end_day")["Day"]
-        next_day = int(future_days.min()) if not future_days.empty else None
-        days_to = (next_day - end_day) if next_day else None
+        # Filter stock for this FPS on end_day
+        s = fps_stock[(fps_stock.FPS_ID==fps_id) & (fps_stock.Day==end_day)]["Stock_Level_tons"]
+        stock_now = float(s.iloc[0]) if not s.empty else 0.0
+
+        # Next receipts after end_day
+        future = dispatch_lg[(dispatch_lg.FPS_ID==fps_id) & (dispatch_lg.Day> end_day)]["Day"]
+        next_day = int(future.min()) if not future.empty else None
+        days_to  = (next_day - end_day) if next_day is not None else None
+
         fps_data.append({
             "FPS_ID": fps_id,
             "FPS_Name": fps.set_index("FPS_ID").loc[fps_id,"FPS_Name"],
@@ -182,6 +189,7 @@ with tab5:
             "Next_Receipt_Day": next_day,
             "Days_To_Receipt": days_to
         })
+
     fps_data_df = pd.DataFrame(fps_data)
     st.dataframe(fps_data_df, use_container_width=True)
     st.download_button(
@@ -190,6 +198,7 @@ with tab5:
         "fps_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 # ————————————————————————————————
 # 11. Downloads

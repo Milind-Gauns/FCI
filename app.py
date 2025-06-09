@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from io import BytesIO
 import math
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 # ————————————————————————————————
 # 1. Load & Cache Data
@@ -17,41 +20,62 @@ def load_data(fn):
     fps          = pd.read_excel(fn, sheet_name="FPS")
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-DATA_FILE = "distribution_dashboard_template.xlsx"
+DATA_FILE = "distribution_dashboard_output.xlsx"
 settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data(DATA_FILE)
 
 # ————————————————————————————————
 # 2. Compute Metrics
 # ————————————————————————————————
 DAYS      = int(settings.query("Parameter=='Distribution_Days'")["Value"].iloc[0])
+TRUCK_CAP = float(settings.query("Parameter=='Vehicle_Capacity_tons'")["Value"].iloc[0])
 MAX_TRIPS = int(settings.query("Parameter=='Vehicles_Total'")["Value"].iloc[0]) * \
             int(settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0])
-TRUCK_CAP = float(settings.query("Parameter=='Vehicle_Capacity_tons'")["Value"].iloc[0])
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
-# Daily dispatch totals
-day_totals_cg = (dispatch_cg
-    .groupby("Dispatch_Day")["Quantity_tons"]
-    .sum().reset_index().rename(columns={"Dispatch_Day":"Day"}))
-day_totals_lg = (dispatch_lg
-    .groupby("Day")["Quantity_tons"]
-    .sum().reset_index())
+# For predispatch slider range
+# Compute X as max over cumulative need vs capacity
+daily_total_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum()
+cum_need = 0
+adv = []
+for d in range(1, DAYS+1):
+    need = daily_total_cg.get(d, 0)
+    cum_need += need
+    over = (cum_need - DAILY_CAP * d) / DAILY_CAP
+    adv.append(math.ceil(over) if over>0 else 0)
+X = max(adv)
+MIN_DAY = 1 - X
+MAX_DAY = DAYS
 
-# Vehicle utilization per day
-veh_usage = (dispatch_lg
-    .groupby("Day")["Vehicle_ID"]
-    .nunique().reset_index(name="Trips_Used"))
+# Daily dispatch totals
+day_totals_cg = (
+    dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"]
+    .sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
+)
+day_totals_lg = (
+    dispatch_lg.groupby("Day")["Quantity_tons"]
+    .sum().reset_index()
+)
+
+# Vehicle utilization
+veh_usage = (
+    dispatch_lg.groupby("Day")["Vehicle_ID"]
+    .nunique().reset_index(name="Trips_Used")
+)
 veh_usage["Max_Trips"] = MAX_TRIPS
 
 # LG stock over time
-lg_stock = (stock_levels[stock_levels.Entity_Type=="LG"]
+lg_stock = (
+    stock_levels[stock_levels.Entity_Type=="LG"]
     .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")
-    .fillna(method="ffill"))
+    .fillna(method="ffill")
+)
 
 # FPS stock & at-risk
-fps_stock = (stock_levels[stock_levels.Entity_Type=="FPS"]
+fps_stock = (
+    stock_levels[stock_levels.Entity_Type=="FPS"]
     .merge(fps[["FPS_ID","Reorder_Threshold_tons"]],
-           left_on="Entity_ID", right_on="FPS_ID"))
+           left_on="Entity_ID", right_on="FPS_ID")
+)
 fps_stock["At_Risk"] = fps_stock.Stock_Level_tons <= fps_stock.Reorder_Threshold_tons
 
 # Total 30-day plan
@@ -65,7 +89,12 @@ st.title("🚛 Grain Distribution Dashboard")
 
 with st.sidebar:
     st.header("Filters")
-    day_range = st.slider("Day Range", 1, DAYS, (1, DAYS))
+    day_range = st.slider(
+        "Dispatch Window (including pre-days)", 
+        min_value=MIN_DAY, max_value=MAX_DAY,
+        value=(MIN_DAY, MAX_DAY),
+        format="%d"
+    )
     st.subheader("Select LGs")
     cols = st.columns(4)
     selected_lgs = []
@@ -73,53 +102,47 @@ with st.sidebar:
         if cols[i % 4].checkbox(f"{lg}", value=True, key=f"lg_{lg}"):
             selected_lgs.append(lg)
     st.markdown("---")
-    # Day-wise KPIs per sidebar if desired (optional)
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum()
-    lg_sel = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum()
+    lg_sel = day_totals_lg.query("Day>=1 & Day<=@day_range[1]")["Quantity_tons"].sum()
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
+    st.metric("Max Trucks/Day", MAX_TRIPS)
+    st.metric("Truck Capacity (t)", TRUCK_CAP)
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["Overview", "FPS Report", "Metrics"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "CG→LG Overview", "LG→FPS Overview", 
+    "FPS Report", "FPS At-Risk", 
+    "FPS Data", "Downloads", "Metrics"
+])
 
 # ————————————————————————————————
-# 4. Tab 1: Overview
+# 4. Tab1: CG→LG Overview
 # ————————————————————————————————
 with tab1:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("CG → LG Dispatch Trend")
-        df1 = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")
-        fig1 = px.line(df1, x="Day", y="Quantity_tons", markers=True,
-                       labels={"Quantity_tons":"Tons"})
-        st.plotly_chart(fig1, use_container_width=True)
-    with c2:
-        st.subheader("LG → FPS Dispatch Trend")
-        df2 = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")
-        fig2 = px.line(df2, x="Day", y="Quantity_tons", markers=True,
-                       labels={"Quantity_tons":"Tons"})
-        st.plotly_chart(fig2, use_container_width=True)
-
-    c3, c4 = st.columns(2)
-    with c3:
-        st.subheader("Vehicle Utilization")
-        vu = veh_usage.query("Day>=@day_range[0] & Day<=@day_range[1]")
-        fig3 = px.area(vu, x="Day", y=["Trips_Used","Max_Trips"],
-                       labels={"value":"Trips","variable":"Metric"})
-        st.plotly_chart(fig3, use_container_width=True)
-    with c4:
-        st.subheader("LG Stock Levels")
-        stock_slice = lg_stock.loc[day_range[0]:day_range[1], selected_lgs]
-        fig4 = px.line(stock_slice, labels={"value":"Stock (t)","Day":"Day"})
-        st.plotly_chart(fig4, use_container_width=True)
+    st.subheader("CG → LG Dispatch")
+    df1 = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")
+    fig1 = px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
+    fig1.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
+    st.plotly_chart(fig1, use_container_width=True)
 
 # ————————————————————————————————
-# 5. Tab 2: FPS Report
+# 5. Tab2: LG→FPS Overview
 # ————————————————————————————————
 with tab2:
+    st.subheader("LG → FPS Dispatch")
+    df2 = day_totals_lg.query("Day>=1 & Day<=@day_range[1]")
+    fig2 = px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
+    fig2.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
+    st.plotly_chart(fig2, use_container_width=True)
+
+# ————————————————————————————————
+# 6. Tab3: FPS Report
+# ————————————————————————————————
+with tab3:
     st.subheader("FPS‐wise Dispatch Details")
-    fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")
+    fps_df = dispatch_lg.query("Day>=1 & Day<=@day_range[1]")
     report = (
         fps_df.groupby("FPS_ID")
         .agg(
@@ -133,71 +156,111 @@ with tab2:
     )
     st.dataframe(report, use_container_width=True)
 
-    def to_excel(df):
-        buf = BytesIO()
-        df.to_excel(buf, index=False)
-        return buf.getvalue()
-
-    st.download_button(
-        "📥 Download FPS Report",
-        to_excel(report),
-        f"FPS_Report_{day_range[0]}to{day_range[1]}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+# ————————————————————————————————
+# 7. Tab4: FPS At-Risk
+# ————————————————————————————————
+with tab4:
+    st.subheader("FPS At-Risk List")
+    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")
+    arf = arf[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
+    st.dataframe(arf, use_container_width=True)
+    st.download_button("Download At-Risk List (Excel)", 
+                       arf.to_excel(index=False), 
+                       "fps_at_risk.xlsx", 
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 6. Tab 3: Metrics
+# 8. Tab5: FPS Data
 # ————————————————————————————————
-with tab3:
+with tab5:
+    st.subheader("FPS Stock & Upcoming Receipts")
+    end_day = min(day_range[1], DAYS)
+    fps_data = []
+    for fps_id in fps.FPS_ID:
+        stock_now = fps_stock.query("FPS_ID==@fps_id & Day==@end_day")["Stock_Level_tons"]
+        stock_now = float(stock_now) if not stock_now.empty else 0.0
+        future_days = dispatch_lg.query("FPS_ID==@fps_id & Day>@end_day")["Day"]
+        next_day = int(future_days.min()) if not future_days.empty else None
+        days_to = (next_day - end_day) if next_day else None
+        fps_data.append({
+            "FPS_ID": fps_id,
+            "FPS_Name": fps.set_index("FPS_ID").loc[fps_id,"FPS_Name"],
+            "Current_Stock_tons": stock_now,
+            "Next_Receipt_Day": next_day,
+            "Days_To_Receipt": days_to
+        })
+    fps_data_df = pd.DataFrame(fps_data)
+    st.dataframe(fps_data_df, use_container_width=True)
+    st.download_button("Download FPS Data (Excel)", 
+                       fps_data_df.to_excel(index=False), 
+                       "fps_data.xlsx", 
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ————————————————————————————————
+# 9. Tab6: Downloads (Excel & PDF)
+# ————————————————————————————————
+def to_excel(df):
+    buf = BytesIO()
+    df.to_excel(buf, index=False)
+    return buf.getvalue()
+
+with tab6:
+    st.subheader("Download Reports")
+    st.download_button("Download FPS Report (Excel)", 
+                       to_excel(report), 
+                       f"FPS_Report_{1}_to_{day_range[1]}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    # PDF export
+    pdf_buf = BytesIO()
+    with PdfPages(pdf_buf) as pdf:
+        fig, ax = plt.subplots(figsize=(8, len(report)*0.3 + 1))
+        ax.axis('off')
+        tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        pdf.savefig(fig, bbox_inches='tight')
+    st.download_button("Download FPS Report (PDF)", 
+                       pdf_buf.getvalue(), 
+                       f"FPS_Report_{1}_to_{day_range[1]}.pdf",
+                       mime="application/pdf")
+
+# ————————————————————————————————
+# 10. Tab7: Metrics
+# ————————————————————————————————
+with tab7:
     st.subheader("Key Performance Indicators")
-    # compute metrics
-    sel_days = day_range[1] - day_range[0] + 1
-    avg_daily_cg = cg_sel / sel_days if sel_days else 0
-    avg_daily_lg = lg_sel / sel_days if sel_days else 0
-    avg_trips    = veh_usage.query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"].mean()
+    sel_days = day_range[1] - max(day_range[0],1) + 1
+    avg_daily_cg = cg_sel/sel_days if sel_days>0 else 0
+    avg_daily_lg = lg_sel/sel_days if sel_days>0 else 0
+    avg_trips    = veh_usage.query("Day>=1 & Day<=@day_range[1]")["Trips_Used"].mean()
     pct_fleet    = (avg_trips / MAX_TRIPS)*100 if MAX_TRIPS else 0
 
-    # LG & FPS stock at end day
-    end_day = day_range[1]
-    lg_onhand  = lg_stock.loc[end_day, selected_lgs].sum()
-    # FPS stock sum
-    fps_end_stock = fps_stock.query("Day==@end_day")["Stock_Level_tons"].sum()
-    # % LG capacity filled
-    lg_caps = lgs.set_index("LG_ID").loc[selected_lgs]["Storage_Capacity_tons"].sum()
-    pct_lg_filled = (lg_onhand / lg_caps)*100 if lg_caps else 0
-    # FPS stock-outs
-    fps_zero = fps_stock.query("Day==@end_day & Stock_Level_tons==0")["FPS_ID"].nunique()
-    # FPS at-risk
-    fps_risk = fps_stock.query("Day==@end_day & At_Risk")["FPS_ID"].nunique()
-    # % plan completed
+    lg_onhand    = lg_stock.loc[end_day, selected_lgs].sum()
+    fps_onhand   = fps_stock.query("Day==@end_day")["Stock_Level_tons"].sum()
+    lg_caps      = lgs.set_index("LG_ID").loc[selected_lgs,"Storage_Capacity_tons"].sum()
+    pct_lg_filled= (lg_onhand/lg_caps)*100 if lg_caps else 0
+    fps_zero     = fps_stock.query("Day==@end_day & Stock_Level_tons==0")["FPS_ID"].nunique()
+    fps_risk     = fps_stock.query("Day==@end_day & At_Risk")["FPS_ID"].nunique()
     dispatched_cum = day_totals_lg.query("Day<=@end_day")["Quantity_tons"].sum()
-    pct_plan = (dispatched_cum/total_plan)*100 if total_plan else 0
-    # days remaining
-    remaining_t = total_plan - dispatched_cum
-    days_rem = math.ceil(remaining_t / DAILY_CAP) if DAILY_CAP else None
+    pct_plan      = (dispatched_cum/total_plan)*100 if total_plan else 0
+    remaining_t   = total_plan - dispatched_cum
+    days_rem      = math.ceil(remaining_t/DAILY_CAP) if DAILY_CAP else None
 
-    # Display cards in grid
     metrics = [
-        ("Total CG→LG (t)", f"{cg_sel:,.1f}"),
-        ("Total LG→FPS (t)", f"{lg_sel:,.1f}"),
+        ("Total CG→LG (t)",       f"{cg_sel:,.1f}"),
+        ("Total LG→FPS (t)",      f"{lg_sel:,.1f}"),
         ("Avg Daily CG→LG (t/d)", f"{avg_daily_cg:,.1f}"),
-        ("Avg Daily LG→FPS (t/d)", f"{avg_daily_lg:,.1f}"),
-        ("Avg Trips/Day",       f"{avg_trips:.1f}"),
-        ("% Fleet Utilization", f"{pct_fleet:.1f}%"),
-        ("LG Stock on Hand (t)",f"{lg_onhand:,.1f}"),
-        ("FPS Stock on Hand (t)",f"{fps_end_stock:,.1f}"),
-        ("% LG Cap Filled",     f"{pct_lg_filled:.1f}%"),
-        ("FPS Stock-Outs",      f"{fps_zero}"),
-        ("FPS At-Risk Count",   f"{fps_risk}"),
-        ("% Plan Completed",    f"{pct_plan:.1f}%"),
-        ("Days Remaining",      f"{days_rem}")
+        ("Avg Daily LG→FPS (t/d)",f"{avg_daily_lg:,.1f}"),
+        ("Avg Trips/Day",         f"{avg_trips:.1f}"),
+        ("% Fleet Utilization",   f"{pct_fleet:.1f}%"),
+        ("LG Stock on Hand (t)",  f"{lg_onhand:,.1f}"),
+        ("FPS Stock on Hand (t)", f"{fps_onhand:,.1f}"),
+        ("% LG Cap Filled",       f"{pct_lg_filled:.1f}%"),
+        ("FPS Stock-Outs",        f"{fps_zero}"),
+        ("FPS At-Risk Count",     f"{fps_risk}"),
+        ("% Plan Completed",      f"{pct_plan:.1f}%"),
+        ("Days Remaining",        f"{days_rem}")
     ]
-
     cols = st.columns(3)
     for i, (label, val) in enumerate(metrics):
         cols[i%3].metric(label, val)
-
-dl_cg = to_excel(dispatch_cg)
-dl_lg = to_excel(dispatch_lg)
-st.download_button("Download CG→LG Dispatch", dl_cg, "cg_to_lg.xlsx")
-st.download_button("Download LG→FPS Dispatch", dl_lg, "lg_to_fps.xlsx")

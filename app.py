@@ -101,18 +101,18 @@ with st.sidebar:
     )
 
     st.subheader("Select LGs")
-    # Build a map from ID → Name
-    lg_map = dict(zip(lgs["LG_ID"], lgs["LG_Name"]))
-    # Only include the LGs present in lg_stock
-    lg_ids    = list(lg_stock.columns)
-    lg_names  = [lg_map[lg] for lg in lg_ids]
+# Map LG_ID → LG_Name
+lg_map = dict(zip(lgs["LG_ID"], lgs["LG_Name"]))
+# Only keep the IDs that actually appear in your stock pivot
+lg_ids   = list(lg_stock.columns)
+lg_names = [lg_map[lg] for lg in lg_ids]
 
-    # Now render checkboxes in a 4-column grid
-    cols = st.columns(4)
-    selected_ids = []
-    for i, name in enumerate(lg_names):
-        if cols[i % 4].checkbox(name, value=True, key=f"lg_{name}"):
-            selected_ids.append(lg_ids[i])
+cols = st.columns(4)
+selected_lgs = []
+for i, name in enumerate(lg_names):
+    if cols[i % 4].checkbox(name, value=True, key=f"lg_{lg_ids[i]}"):
+        selected_lgs.append(lg_ids[i])
+
 
     # Use selected_ids downstream in place of selected_lgs
     selected_lgs = selected_ids

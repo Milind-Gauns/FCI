@@ -151,30 +151,30 @@ nodes     = ["CG"] + lg_nodes + fps_nodes
 # 2) Build index mapping
 idx = {node: i for i, node in enumerate(nodes)}
 
-# 3) Links from CG → LG
-links = []
+# 3) Build raw link dicts
+raw_links = []
 for _, row in cg_lg_flow.iterrows():
-    lg_str = str(int(row.LG_ID))
-    links.append(dict(
-        source=idx["CG"],
-        target=idx[lg_str],
-        value=row.Quantity_tons
-    ))
-
-# 4) Links from LG → FPS
+    raw_links.append({
+        "source": idx["CG"],
+        "target": idx[str(int(row.LG_ID))],
+        "value":  row.Quantity_tons
+    })
 for _, row in lg_fps_flow.iterrows():
-    lg_str  = str(int(row.LG_ID))
-    fps_str = str(int(row.FPS_ID))
-    links.append(dict(
-        source=idx[lg_str],
-        target=idx[fps_str],
-        value=row.Quantity_tons
-    ))
+    raw_links.append({
+        "source": idx[str(int(row.LG_ID))],
+        "target": idx[str(int(row.FPS_ID))],
+        "value":  row.Quantity_tons
+    })
 
-# 5) Draw the diagram
+# 4) Convert to parallel arrays
+sources = [l["source"] for l in raw_links]
+targets = [l["target"] for l in raw_links]
+values  = [l["value"]  for l in raw_links]
+
+# 5) Draw the Sankey
 fig_sankey = go.Figure(go.Sankey(
     node=dict(label=nodes, pad=15, thickness=20),
-    link=links
+    link=dict(source=sources, target=targets, value=values)
 ))
 st.plotly_chart(fig_sankey, use_container_width=True)
 

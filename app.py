@@ -4,10 +4,10 @@ import plotly.express as px
 from io import BytesIO
 import math
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages  # <-- Added this import
+from matplotlib.backends.backend_pdf import PdfPages
 
 # ————————————————————————————————
-# 1. Page Config
+# 1. Page Config (must be first Streamlit command)
 # ————————————————————————————————
 st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
 
@@ -30,6 +30,14 @@ def load_data(fn: str):
     stock_levels = pd.read_excel(fn, sheet_name="Stock_Levels")
     lgs          = pd.read_excel(fn, sheet_name="LGs")
     fps          = pd.read_excel(fn, sheet_name="FPS")
+    # Map FPS → LG_NAME for filtering
+    fps = fps.merge(
+        lgs[["LG_ID","LG_Name"]],
+        left_on="Linked_LG_ID",
+        right_on="LG_ID",
+        how="left",
+        suffixes=("","_LG")
+    )
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
 DATA_FILE = "distribution_dashboard_template.xlsx"
@@ -44,7 +52,7 @@ MAX_TRIPS = int(settings.query("Parameter=='Vehicles_Total'")["Value"].iloc[0]) 
             int(settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0])
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
-# Pre-dispatch offset X for negative-day slider
+# Pre-dispatch offset X
 daily_total_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum()
 cum_need = 0
 adv = []
@@ -52,71 +60,47 @@ for d in range(1, DAYS+1):
     need = daily_total_cg.get(d, 0)
     cum_need += need
     over = (cum_need - DAILY_CAP * d) / DAILY_CAP
-    adv.append(math.ceil(over) if over > 0 else 0)
+    adv.append(math.ceil(over) if over>0 else 0)
 X = max(adv)
 MIN_DAY = 1 - X
 MAX_DAY = DAYS
 
 # Aggregations
-day_totals_cg = (
-    dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"]
-    .sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
-)
-day_totals_lg = (
-    dispatch_lg.groupby("Day")["Quantity_tons"]
-    .sum().reset_index()
-)
-veh_usage = (
-    dispatch_lg.groupby("Day")["Vehicle_ID"]
-    .nunique().reset_index(name="Trips_Used")
-)
+day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"]\
+                  .sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
+day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"]\
+                  .sum().reset_index()
+veh_usage = dispatch_lg.groupby("Day")["Vehicle_ID"]\
+               .nunique().reset_index(name="Trips_Used")
 veh_usage["Max_Trips"] = MAX_TRIPS
-
-lg_stock = (
-    stock_levels[stock_levels.Entity_Type=="LG"]
-    .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")
-    .fillna(method="ffill")
-)
-
-fps_stock = (
-    stock_levels[stock_levels.Entity_Type=="FPS"]
-    .merge(fps[["FPS_ID","Reorder_Threshold_tons"]], left_on="Entity_ID", right_on="FPS_ID")
-)
+lg_stock = stock_levels[stock_levels.Entity_Type=="LG"]\
+           .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")\
+           .fillna(method="ffill")
+fps_stock = stock_levels[stock_levels.Entity_Type=="FPS"]\
+            .merge(fps[["FPS_ID","Reorder_Threshold_tons"]], left_on="Entity_ID", right_on="FPS_ID")
 fps_stock["At_Risk"] = fps_stock.Stock_Level_tons <= fps_stock.Reorder_Threshold_tons
-
 total_plan = day_totals_lg.Quantity_tons.sum()
 
 # ————————————————————————————————
-# 5. Layout & Filters
+# 5. Sidebar Filters & KPIs
 # ————————————————————————————————
 st.title("🚛 Grain Distribution Dashboard")
-
 with st.sidebar:
     st.header("Filters")
     day_range = st.slider(
-        "Dispatch Window (days)", 
+        "Dispatch Window (days)",
         min_value=MIN_DAY, max_value=MAX_DAY,
         value=(MIN_DAY, MAX_DAY),
         format="%d"
     )
-
     st.subheader("Select LGs")
-# Map LG_ID → LG_Name
-lg_map = dict(zip(lgs["LG_ID"], lgs["LG_Name"]))
-# Only keep the IDs that actually appear in your stock pivot
-lg_ids   = list(lg_stock.columns)
-lg_names = [lg_map[lg] for lg in lg_ids]
-
-cols = st.columns(4)
-selected_lgs = []
-for i, name in enumerate(lg_names):
-    if cols[i % 4].checkbox(name, value=True, key=f"lg_{lg_ids[i]}"):
-        selected_lgs.append(lg_ids[i])
-
-
-    # Use selected_ids downstream in place of selected_lgs
-    selected_lgs = selected_ids
-
+    cols = st.columns(4)
+    lg_ids   = list(lg_stock.columns)
+    lg_names = [lgs.set_index("LG_ID").loc[lg,"LG_Name"] for lg in lg_ids]
+    selected_lgs = []
+    for i, name in enumerate(lg_names):
+        if cols[i % 4].checkbox(name, value=True, key=f"lg_{lg_ids[i]}"):
+            selected_lgs.append(lg_ids[i])
     st.markdown("---")
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum()
@@ -127,7 +111,16 @@ for i, name in enumerate(lg_names):
     st.metric("Truck Capacity (t)", TRUCK_CAP)
 
 # ————————————————————————————————
-# 6. CG→LG Overview
+# 6. Tabs Setup
+# ————————————————————————————————
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "CG→LG Overview", "LG→FPS Overview",
+    "FPS Report", "FPS At-Risk",
+    "FPS Data", "Downloads", "Metrics"
+])
+
+# ————————————————————————————————
+# 7. CG→LG Overview
 # ————————————————————————————————
 with tab1:
     st.subheader("CG → LG Dispatch")
@@ -137,7 +130,7 @@ with tab1:
     st.plotly_chart(fig1, use_container_width=True)
 
 # ————————————————————————————————
-# 7. LG→FPS Overview
+# 8. LG→FPS Overview
 # ————————————————————————————————
 with tab2:
     st.subheader("LG → FPS Dispatch")
@@ -147,11 +140,13 @@ with tab2:
     st.plotly_chart(fig2, use_container_width=True)
 
 # ————————————————————————————————
-# 8. FPS Report
+# 9. FPS Report
 # ————————————————————————————————
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
-    fps_df = dispatch_lg.query("Day>=1 & Day<=@day_range[1]")
+    fps_df = dispatch_lg.query(
+        "Day>=1 & Day<=@day_range[1] & LG_ID in @selected_lgs"
+    )
     report = (
         fps_df.groupby("FPS_ID")
         .agg(
@@ -160,19 +155,24 @@ with tab3:
             Vehicle_IDs=pd.NamedAgg("Vehicle_ID", lambda vs: ",".join(map(str,sorted(set(vs)))))
         )
         .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name"]], on="FPS_ID", how="left")
+        .merge(fps[["FPS_ID","FPS_Name","Linked_LG_ID","LG_ID"]], on="FPS_ID", how="left")
+        .query("LG_ID in @selected_lgs")
         .sort_values("Total_Dispatched_tons", ascending=False)
     )
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————
-# 9. FPS At-Risk
+# 10. FPS At-Risk
 # ————————————————————————————————
 with tab4:
     st.subheader("FPS At-Risk List")
-    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")[[
-        "Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"
-    ]]
+    arf = fps_stock.merge(
+        fps[["FPS_ID","Linked_LG_ID"]], on="FPS_ID"
+    ).query(
+        "Day>=1 & Day<=@day_range[1] & At_Risk & Linked_LG_ID in @selected_lgs"
+    )[
+        ["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons","Linked_LG_ID"]
+    ]
     st.dataframe(arf, use_container_width=True)
     st.download_button(
         "Download At-Risk (Excel)",
@@ -182,16 +182,18 @@ with tab4:
     )
 
 # ————————————————————————————————
-# 10. FPS Data
+# 11. FPS Data
 # ————————————————————————————————
 with tab5:
     st.subheader("FPS Stock & Upcoming Receipts")
     end_day = min(day_range[1], DAYS)
     fps_data = []
-    for fps_id in fps.FPS_ID:
-        s = fps_stock[(fps_stock.FPS_ID==fps_id) & (fps_stock.Day==end_day)]["Stock_Level_tons"]
+    for fps_id in fps.query("LG_ID in @selected_lgs")["FPS_ID"]:
+        s = fps_stock.query("FPS_ID==@fps_id & Day==@end_day")["Stock_Level_tons"]
         stock_now = float(s.iloc[0]) if not s.empty else 0.0
-        future = dispatch_lg[(dispatch_lg.FPS_ID==fps_id) & (dispatch_lg.Day> end_day)]["Day"]
+        future = dispatch_lg.query(
+            "FPS_ID==@fps_id & Day>@end_day & LG_ID in @selected_lgs"
+        )["Day"]
         next_day = int(future.min()) if not future.empty else None
         days_to = (next_day - end_day) if next_day else None
         fps_data.append({
@@ -211,7 +213,7 @@ with tab5:
     )
 
 # ————————————————————————————————
-# 11. Downloads
+# 12. Downloads
 # ————————————————————————————————
 with tab6:
     st.subheader("Download FPS Report")
@@ -237,7 +239,7 @@ with tab6:
     )
 
 # ————————————————————————————————
-# 12. Metrics
+# 13. Metrics
 # ————————————————————————————————
 with tab7:
     st.subheader("Key Performance Indicators")

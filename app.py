@@ -9,7 +9,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 # ————————————————————————————————
 # 1. Page Config (must be first Streamlit command)
 # ————————————————————————————————
-st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
+st.set_page_config(page_title="FCI Distribution Dashboard", layout="wide")
 
 # ————————————————————————————————
 # 2. Helper to export DataFrame to Excel

@@ -3,14 +3,16 @@ import pandas as pd
 import plotly.express as px
 from io import BytesIO
 import math
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages  # <-- Added this import
 
 # ————————————————————————————————
-# 1. Initialization
+# 1. Page Config
 # ————————————————————————————————
 st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
 
 # ————————————————————————————————
-# 2. Helpers
+# 2. Helper to export DataFrame to Excel
 # ————————————————————————————————
 def to_excel(df: pd.DataFrame) -> bytes:
     buf = BytesIO()
@@ -42,7 +44,7 @@ MAX_TRIPS = int(settings.query("Parameter=='Vehicles_Total'")["Value"].iloc[0]) 
             int(settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0])
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
-# Pre-dispatch offset X
+# Pre-dispatch offset X for negative-day slider
 daily_total_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum()
 cum_need = 0
 adv = []
@@ -56,20 +58,30 @@ MIN_DAY = 1 - X
 MAX_DAY = DAYS
 
 # Aggregations
-day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"]\
-                  .sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
-day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"]\
-                  .sum().reset_index()
-veh_usage = dispatch_lg.groupby("Day")["Vehicle_ID"]\
-               .nunique().reset_index(name="Trips_Used")
+day_totals_cg = (
+    dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"]
+    .sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
+)
+day_totals_lg = (
+    dispatch_lg.groupby("Day")["Quantity_tons"]
+    .sum().reset_index()
+)
+veh_usage = (
+    dispatch_lg.groupby("Day")["Vehicle_ID"]
+    .nunique().reset_index(name="Trips_Used")
+)
 veh_usage["Max_Trips"] = MAX_TRIPS
 
-lg_stock = stock_levels[stock_levels.Entity_Type=="LG"]\
-           .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")\
-           .fillna(method="ffill")
+lg_stock = (
+    stock_levels[stock_levels.Entity_Type=="LG"]
+    .pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons")
+    .fillna(method="ffill")
+)
 
-fps_stock = stock_levels[stock_levels.Entity_Type=="FPS"]\
-            .merge(fps[["FPS_ID","Reorder_Threshold_tons"]], left_on="Entity_ID", right_on="FPS_ID")
+fps_stock = (
+    stock_levels[stock_levels.Entity_Type=="FPS"]
+    .merge(fps[["FPS_ID","Reorder_Threshold_tons"]], left_on="Entity_ID", right_on="FPS_ID")
+)
 fps_stock["At_Risk"] = fps_stock.Stock_Level_tons <= fps_stock.Reorder_Threshold_tons
 
 total_plan = day_totals_lg.Quantity_tons.sum()
@@ -102,7 +114,7 @@ with st.sidebar:
     st.metric("Max Trucks/Day", MAX_TRIPS)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
 
-# Tabs
+# Create tabs
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "CG→LG Overview", "LG→FPS Overview", 
     "FPS Report", "FPS At-Risk", 
@@ -153,7 +165,9 @@ with tab3:
 # ————————————————————————————————
 with tab4:
     st.subheader("FPS At-Risk List")
-    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
+    arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")[[
+        "Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"
+    ]]
     st.dataframe(arf, use_container_width=True)
     st.download_button(
         "Download At-Risk (Excel)",
@@ -165,23 +179,16 @@ with tab4:
 # ————————————————————————————————
 # 10. FPS Data
 # ————————————————————————————————
-# ————————————————————————————————
-# 10. FPS Data (corrected)
-# ————————————————————————————————
 with tab5:
     st.subheader("FPS Stock & Upcoming Receipts")
     end_day = min(day_range[1], DAYS)
     fps_data = []
     for fps_id in fps.FPS_ID:
-        # Filter stock for this FPS on end_day
         s = fps_stock[(fps_stock.FPS_ID==fps_id) & (fps_stock.Day==end_day)]["Stock_Level_tons"]
         stock_now = float(s.iloc[0]) if not s.empty else 0.0
-
-        # Next receipts after end_day
         future = dispatch_lg[(dispatch_lg.FPS_ID==fps_id) & (dispatch_lg.Day> end_day)]["Day"]
         next_day = int(future.min()) if not future.empty else None
-        days_to  = (next_day - end_day) if next_day is not None else None
-
+        days_to = (next_day - end_day) if next_day else None
         fps_data.append({
             "FPS_ID": fps_id,
             "FPS_Name": fps.set_index("FPS_ID").loc[fps_id,"FPS_Name"],
@@ -189,7 +196,6 @@ with tab5:
             "Next_Receipt_Day": next_day,
             "Days_To_Receipt": days_to
         })
-
     fps_data_df = pd.DataFrame(fps_data)
     st.dataframe(fps_data_df, use_container_width=True)
     st.download_button(
@@ -198,7 +204,6 @@ with tab5:
         "fps_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
 
 # ————————————————————————————————
 # 11. Downloads
@@ -211,7 +216,6 @@ with tab6:
         f"FPS_Report_{1}_to_{day_range[1]}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    # PDF
     pdf_buf = BytesIO()
     with PdfPages(pdf_buf) as pdf:
         fig, ax = plt.subplots(figsize=(8, len(report)*0.3 + 1))

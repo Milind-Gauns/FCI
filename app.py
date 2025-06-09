@@ -99,12 +99,24 @@ with st.sidebar:
         value=(MIN_DAY, MAX_DAY),
         format="%d"
     )
+
     st.subheader("Select LGs")
+    # Build a map from ID → Name
+    lg_map = dict(zip(lgs["LG_ID"], lgs["LG_Name"]))
+    # Only include the LGs present in lg_stock
+    lg_ids    = list(lg_stock.columns)
+    lg_names  = [lg_map[lg] for lg in lg_ids]
+
+    # Now render checkboxes in a 4-column grid
     cols = st.columns(4)
-    selected_lgs = []
-    for i, lg in enumerate(lg_stock.columns):
-        if cols[i % 4].checkbox(str(lg), value=True, key=f"lg_{lg}"):
-            selected_lgs.append(lg)
+    selected_ids = []
+    for i, name in enumerate(lg_names):
+        if cols[i % 4].checkbox(name, value=True, key=f"lg_{name}"):
+            selected_ids.append(lg_ids[i])
+
+    # Use selected_ids downstream in place of selected_lgs
+    selected_lgs = selected_ids
+
     st.markdown("---")
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum()
@@ -113,13 +125,6 @@ with st.sidebar:
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
     st.metric("Max Trucks/Day", MAX_TRIPS)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
-
-# Create tabs
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "CG→LG Overview", "LG→FPS Overview", 
-    "FPS Report", "FPS At-Risk", 
-    "FPS Data", "Downloads", "Metrics"
-])
 
 # ————————————————————————————————
 # 6. CG→LG Overview

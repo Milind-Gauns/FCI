@@ -30,7 +30,7 @@ def load_data(fn):
     fps = fps.merge(lgs[["LG_ID","LG_Name"]], left_on="Linked_LG_ID", right_on="LG_ID", how="left")
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_output.xlsx")
+settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_template.xlsx")
 
 # 4. Metrics
 DAYS      = int(settings.query("Parameter=='Distribution_Days'")["Value"].iloc[0])

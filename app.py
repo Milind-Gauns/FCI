@@ -36,7 +36,7 @@ def load_data(fn):
     )
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-DATA_FILE = "distribution_dashboard_output.xlsx"
+DATA_FILE = "distribution_dashboard_template.xlsx"
 settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data(DATA_FILE)
 
 # 4. Compute metrics

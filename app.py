@@ -102,13 +102,17 @@ with tab2:
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
     fps_df=dispatch_lg.query("Day>=1 & Day<=@day_range[1] & LG_ID in @sel_lgs")
-    report=(fps_df.groupby("FPS_ID")
-        .agg(Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-             Trips_Count=pd.NamedAgg("Vehicle_ID","nunique"),
-             Vehicle_IDs=pd.NamedAgg("Vehicle_ID",lambda vs:",".join(map(str,sorted(set(vs))))))
-        .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name"]],on="FPS_ID")
-        .sort_values("Total_Dispatched_tons",ascending=False))
+    report = (
+    fps_df.groupby("FPS_ID")
+    .agg(
+        Total_Dispatched_tons=pd.NamedAgg("Quantity_tons", "sum"),
+        Trips_Count=pd.NamedAgg("Vehicle_ID", "nunique"),
+        Vehicle_IDs=pd.NamedAgg("Vehicle_ID", lambda vs: ",".join(map(str, sorted(set(vs)))))
+    )
+    .reset_index()
+    .merge(fps[["FPS_ID", "FPS_Name"]], on="FPS_ID", how="left")
+    .sort_values("Total_Dispatched_tons", ascending=False)
+)
     st.dataframe(report,use_container_width=True)
 
 # Tab4

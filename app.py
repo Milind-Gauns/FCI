@@ -151,23 +151,38 @@ with tab2:
 # ————————————————————————————————
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
+    # Filter LG→FPS dispatch by selected LGs and day range
     fps_df = dispatch_lg.query(
         "Day>=1 & Day<=@day_range[1] & LG_ID in @selected_lgs"
     )
+    # Aggregate per FPS
     report = (
-        fps_df.groupby("FPS_ID")
+        fps_df
+        .groupby("FPS_ID")
         .agg(
-            Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-            Trips_Count=pd.NamedAgg("Vehicle_ID","nunique"),
-            Vehicle_IDs=pd.NamedAgg("Vehicle_ID", lambda vs: ",".join(map(str,sorted(set(vs)))))
+            Total_Dispatched_tons=pd.NamedAgg(column="Quantity_tons", aggfunc="sum"),
+            Trips_Count=pd.NamedAgg(column="Vehicle_ID",     aggfunc="nunique"),
+            Vehicle_IDs=pd.NamedAgg(
+                column="Vehicle_ID",
+                aggfunc=lambda vs: ",".join(map(str, sorted(set(vs))))
+            )
         )
         .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name","Linked_LG_ID","LG_ID"]], on="FPS_ID", how="left")
-        .query("LG_ID in @selected_lgs")
+        # Attach FPS names
+        .merge(fps[["FPS_ID","FPS_Name"]], on="FPS_ID", how="left")
+        # Only keep FPS linked to your selected LGs
+        .query("FPS_ID in @fps[fps.Linked_LG_ID.astype(int).isin(selected_lgs)].FPS_ID.tolist()")
         .sort_values("Total_Dispatched_tons", ascending=False)
     )
 
     st.dataframe(report, use_container_width=True)
+    st.download_button(
+        "Download FPS Report (Excel)",
+        to_excel(report),
+        f"FPS_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 
 # ————————————————————————————————
 # 10. FPS At-Risk

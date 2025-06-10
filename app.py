@@ -154,7 +154,7 @@ with tab3:
     fps_df = dispatch_lg.query(
         "Day>=1 & Day<=@day_range[1] & LG_ID in @selected_lgs"
     )
-    report = (Add commentMore actions
+    report = (
         fps_df.groupby("FPS_ID")
         .agg(
             Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),

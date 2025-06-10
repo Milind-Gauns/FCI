@@ -50,8 +50,14 @@ day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum().reset
 day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"].sum().reset_index()
 veh_usage     = dispatch_lg.groupby("Day")["Vehicle_ID"].nunique().reset_index(name="Trips_Used")
 veh_usage["Max_Trips"] = MAX_TRIPS
+entity_type_col = next(
+    col for col in stock_levels.columns 
+    if col.lower().replace("_"," ").strip() == "entity type"
+)
+
+# Pivot LG stock
 lg_stock = (
-    stock_levels[stock_levels["Entity Type"] == "LG"]
+    stock_levels[stock_levels[entity_type_col] == "LG"]
     .pivot_table(
         index="Day",
         columns="Entity_ID",

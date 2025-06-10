@@ -6,7 +6,7 @@ import math
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-# 1. Page config
+# 1. Page config (first Streamlit command)
 st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
 
 # 2. Excel export helper
@@ -24,23 +24,25 @@ def load_data(fn):
     stock_levels = pd.read_excel(fn, sheet_name="Stock_Levels")
     lgs          = pd.read_excel(fn, sheet_name="LGs")
     fps          = pd.read_excel(fn, sheet_name="FPS")
+    # Ensure LG_ID is string
+    lgs["LG_ID"] = lgs["LG_ID"].astype(str)
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_output.xlsx")
+settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_template.xlsx")
 
-# 4. Compute core metrics
+# 4. Core metrics
 DAYS      = int(settings.query("Parameter=='Distribution_Days'")["Value"].iloc[0])
 TRUCK_CAP = float(settings.query("Parameter=='Vehicle_Capacity_tons'")["Value"].iloc[0])
 MAX_TRIPS = int(settings.query("Parameter=='Vehicles_Total'")["Value"].iloc[0]) * int(settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0])
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
-# Pre-dispatch offset X
+# Pre-dispatch offset
 dt = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum()
 cum = 0; adv = []
 for d in range(1, DAYS+1):
-    cum += dt.get(d, 0)
-    over = (cum - DAILY_CAP * d) / DAILY_CAP
-    adv.append(math.ceil(over) if over > 0 else 0)
+    cum += dt.get(d,0)
+    over = (cum - DAILY_CAP*d)/DAILY_CAP
+    adv.append(math.ceil(over) if over>0 else 0)
 X = max(adv); MIN_DAY = 1 - X; MAX_DAY = DAYS
 
 # Aggregations
@@ -50,31 +52,33 @@ veh_usage     = dispatch_lg.groupby("Day")["Vehicle_ID"].nunique().reset_index(n
 veh_usage["Max_Trips"] = MAX_TRIPS
 lg_stock      = stock_levels[stock_levels.Entity_Type=="LG"].pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons").fillna(method="ffill")
 
-# --- Updated FPS stock / At_Risk block ---
-# Rename Entity_ID → FPS_ID and merge thresholds
+# -------------- Simplified FPS stock & At-Risk --------------
 fps_stock = (
-    stock_levels[stock_levels.Entity_Type=="FPS"]
+    stock_levels[stock_levels.Entity_Type == "FPS"]
     .rename(columns={"Entity_ID": "FPS_ID"})
-    [["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
+    .merge(
+        fps[["FPS_ID", "Reorder_Threshold_tons", "Linked_LG_ID"]],
+        on="FPS_ID",
+        how="left"
+    )
 )
-# Compute at-risk flag
 fps_stock["At_Risk"] = fps_stock["Stock_Level_tons"] <= fps_stock["Reorder_Threshold_tons"]
-# -- end update --
+# ------------------------------------------------------------
 
 total_plan = day_totals_lg.Quantity_tons.sum()
 
-# 5. Sidebar filters & KPIs
+# 5. Sidebar
 st.title("🚛 Grain Distribution Dashboard")
 with st.sidebar:
     st.header("Filters")
     day_range = st.slider("Dispatch Window (days)", MIN_DAY, MAX_DAY, (MIN_DAY, MAX_DAY), format="%d")
     st.subheader("Select LGs")
-    cols = st.columns(4)
-    lg_ids = lgs["LG_ID"].astype(str).tolist()
+    cols     = st.columns(4)
+    lg_ids   = lgs["LG_ID"].tolist()
     lg_names = lgs["LG_Name"].tolist()
     selected_lgs = []
-    for i,name in enumerate(lg_names):
-        if cols[i%4].checkbox(name, True, key=f"lg_{i}"):
+    for i, name in enumerate(lg_names):
+        if cols[i%4].checkbox(name, value=True, key=f"lg_{i}"):
             selected_lgs.append(lg_ids[i])
     st.markdown("---")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum()
@@ -88,14 +92,14 @@ with st.sidebar:
 # 6. CG→LG Overview
 st.subheader("CG → LG Dispatch")
 df1 = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")
-fig1 = px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
+fig1=px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
 fig1.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
 st.plotly_chart(fig1, use_container_width=True)
 
 # 7. LG→FPS Overview
 st.subheader("LG → FPS Dispatch")
 df2 = day_totals_lg.query("Day>=1 & Day<=@day_range[1]")
-fig2 = px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
+fig2=px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
 fig2.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
 st.plotly_chart(fig2, use_container_width=True)
 
@@ -115,8 +119,8 @@ st.dataframe(report, use_container_width=True)
 
 # 9. FPS At-Risk
 st.subheader("FPS At-Risk List")
-arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk")
-st.dataframe(arf, use_container_width=True)
+arf = fps_stock.query("Day>=1 & Day<=@day_range[1] & At_Risk & Linked_LG_ID in @selected_lgs")
+st.dataframe(arf[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]], use_container_width=True)
 st.download_button("Download At-Risk (Excel)", to_excel(arf), "fps_at_risk.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # 10. FPS Data
@@ -153,7 +157,7 @@ avg_cg = cg_sel/sel_days if sel_days>0 else 0
 avg_lg = lg_sel/sel_days if sel_days>0 else 0
 avg_tr = veh_usage.query("Day>=1 & Day<=@day_range[1]")["Trips_Used"].mean()
 pct_f = (avg_tr/MAX_TRIPS)*100 if MAX_TRIPS else 0
-lg_on = lg_stock.loc[end_day, selected_lgs].sum()
+lg_on = lg_stock.loc[end_day, [int(x) for x in selected_lgs]].sum()
 fps_on = fps_stock.query(f"Day=={end_day}")["Stock_Level_tons"].sum()
 lg_cap = lgs[lgs.LG_ID.astype(str).isin(selected_lgs)]["Storage_Capacity_tons"].sum()
 pct_lg = (lg_on/lg_cap)*100 if lg_cap else 0
@@ -162,7 +166,6 @@ fps_r = fps_stock.query(f"Day=={end_day} & At_Risk")["FPS_ID"].nunique()
 disp = day_totals_lg.query(f"Day<={end_day}")["Quantity_tons"].sum()
 pct_p = (disp/total_plan)*100 if total_plan else 0
 rem = total_plan - disp; days_r = math.ceil(rem/DAILY_CAP) if DAILY_CAP else None
-
 KP = [
     ("Total CG→LG (t)",f"{cg_sel:,.1f}"),
     ("Total LG→FPS (t)",f"{lg_sel:,.1f}"),
@@ -172,11 +175,12 @@ KP = [
     ("% Fleet Util",f"{pct_f:.1f}%"),
     ("LG Stock (t)",f"{lg_on:,.1f}"),
     ("FPS Stock (t)",f"{fps_on:,.1f}"),
-    ("% LG Cap Fill",f"{pct_*:.1f}%"),
+    ("% LG Cap Fill",f"{pct_lg:.1f}%"),
     ("FPS Stock-Outs",f"{fps_zero}"),
     ("FPS At-Risk",f"{fps_r}"),
     ("% Plan Completed",f"{pct_p:.1f}%"),
     ("Days Remaining",f"{days_r}")
 ]
 cols = st.columns(3)
-for i,(label,val) in enumerate(KP): cols[i%3].metric(label,val)
+for i,(l,v) in enumerate(KP):
+    cols[i%3].metric(l,v)

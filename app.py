@@ -151,7 +151,11 @@ with tabs[2]:
     st.metric("Trips Made", f"{out.Vehicle_ID.nunique()}")
 
     # 6) FPS under this LG
-    fps_under = fps[ lgs.loc[lgs['LG_Name'] == fps.Linked_LG_ID, 'LG_ID'].values[0] == lg_id]
+    # Step 1: Merge fps with lgs to get LG_ID for each Linked_LG_ID
+    fps_merged = fps.merge(lgs, left_on='Linked_LG_ID', right_on='LG_Name', how='left')
+
+    # Step 2: Filter based on lg_id
+    fps_under = fps_merged[fps_merged['LG_ID'] == lg_id]
     fps_summary = (
         out.groupby("FPS_ID")["Quantity_tons"]
         .sum().reset_index(name="Dispatched_tons")

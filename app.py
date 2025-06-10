@@ -50,8 +50,17 @@ day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum().reset
 day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"].sum().reset_index()
 veh_usage     = dispatch_lg.groupby("Day")["Vehicle_ID"].nunique().reset_index(name="Trips_Used")
 veh_usage["Max_Trips"] = MAX_TRIPS
-lg_stock      = stock_levels[stock_levels.Entity_Type=="LG"].pivot(index="Day", columns="Entity_ID", values="Stock_Level_tons").fillna(method="ffill")
-
+lg_stock = (
+    stock_levels[stock_levels["Entity Type"] == "LG"]
+    .pivot_table(
+        index="Day",
+        columns="Entity_ID",
+        values="Stock_Level_tons",
+        aggfunc="first"
+    )
+    .sort_index()
+    .fillna(method="ffill")
+)
 # -------------- Simplified FPS stock & At-Risk --------------
 fps_stock = (
     stock_levels[stock_levels.Entity_Type == "FPS"]

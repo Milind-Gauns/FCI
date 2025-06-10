@@ -155,17 +155,15 @@ with tab3:
         "Day>=1 & Day<=@day_range[1] & LG_ID in @selected_lgs"
     )
     report = (
-        fps_df.groupby("FPS_ID")
-        .agg(
-            Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-            Trips_Count=pd.NamedAgg("Vehicle_ID","nunique"),
-            Vehicle_IDs=pd.NamedAgg("Vehicle_ID", lambda vs: ",".join(map(str,sorted(set(vs)))))
-        )
-        .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name","Linked_LG_ID","LG_ID"]], on="FPS_ID", how="left")
-        .query("LG_ID in @selected_lgs")
-        .sort_values("Total_Dispatched_tons", ascending=False)
-    )
+    fps_df.groupby("FPS_ID")…
+    .reset_index()
+    .merge(fps[["FPS_ID","FPS_Name"]], on="FPS_ID", how="left")
+)
+# Now filter by the FPS whose Linked_LG_ID (string) maps to a selected numeric LG_ID:
+report = report[report.FPS_ID.isin(
+    fps[fps.Linked_LG_ID.astype(int).isin(selected_lgs)].FPS_ID
+)]
+
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————

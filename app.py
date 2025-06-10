@@ -46,7 +46,14 @@ X = max(adv); MIN_DAY = 1 - X; MAX_DAY = DAYS
 # Aggregations
 day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum().reset_index().rename(columns={"Dispatch_Day":"Day"})
 day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"].sum().reset_index()
-veh_usage     = dispatch_cg.groupby(["Day","LG_ID"])["Vehicle_ID"].nunique().reset_index(name="Trucks_Used")
+veh_usage = (
+    dispatch_cg
+    .groupby(["Dispatch_Day", "LG_ID"])["Vehicle_ID"]
+    .nunique()
+    .reset_index(name="Trucks_Used")
+    .rename(columns={"Dispatch_Day": "Day"})
+)
+veh_usage["Max_Trips"] = MAX_TRIPS
 lg_stock      = stock_levels[stock_levels["Entity Type"]=="LG"].pivot_table(index="Day", columns="Entity_ID", values="Stock_Level_tons", aggfunc="first").fillna(method="ffill")
 
 # 5. Sidebar filters & quick KPIs

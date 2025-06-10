@@ -26,7 +26,7 @@ def load_data(fn):
     fps          = pd.read_excel(fn, sheet_name="FPS")
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
-settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_output.xlsx")
+settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = load_data("distribution_dashboard_template.xlsx")
 
 # 4. Compute metrics
 DAYS      = int(settings.query("Parameter=='Distribution_Days'")["Value"].iloc[0])

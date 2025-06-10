@@ -31,14 +31,20 @@ def load_data(fn: str):
     stock_levels = pd.read_excel(fn, sheet_name="Stock_Levels")
     lgs          = pd.read_excel(fn, sheet_name="LGs")
     fps          = pd.read_excel(fn, sheet_name="FPS")
-    # Map FPS → LG_NAME for filtering
+
+    # Convert LG_ID to string on both sides
+    lgs["LG_ID_str"] = lgs["LG_ID"].astype(str)
+    fps["Linked_LG_ID_str"] = fps["Linked_LG_ID"].astype(str)
+
+    # Merge on string LG_ID
     fps = fps.merge(
-        lgs[["LG_ID","LG_Name"]],
-        left_on="Linked_LG_ID",
-        right_on="LG_ID",
+        lgs[["LG_ID_str", "LG_Name"]],
+        left_on="Linked_LG_ID_str",
+        right_on="LG_ID_str",
         how="left",
-        suffixes=("","_LG")
-    )
+        suffixes=("", "_LG")
+    ).drop(columns=["LG_ID_str", "Linked_LG_ID_str"])
+
     return settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps
 
 DATA_FILE = "distribution_dashboard_template.xlsx"

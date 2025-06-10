@@ -52,7 +52,15 @@ day_totals_cg = dispatch_cg.groupby("Dispatch_Day")["Quantity_tons"].sum().reset
 day_totals_lg = dispatch_lg.groupby("Day")["Quantity_tons"].sum().reset_index()
 veh_usage     = dispatch_lg.groupby("Day")["Vehicle_ID"].nunique().reset_index(name="Trips_Used")
 veh_usage["Max_Trips"]=MAX_TRIPS
-lg_stock      = stock_levels[stock_levels.Entity_Type=="LG"].pivot("Day","Entity_ID","Stock_Level_tons").fillna(method="ffill")
+lg_stock = stock_levels[stock_levels.Entity_Type == "LG"] \
+    .pivot_table(
+        index="Day",
+        columns="Entity_ID",
+        values="Stock_Level_tons",
+        aggfunc="first"
+    ) \
+    .sort_index() \
+    .fillna(method="ffill")
 fps_stock     = stock_levels[stock_levels.Entity_Type=="FPS"].merge(fps[["FPS_ID","Reorder_Threshold_tons"]],left_on="Entity_ID",right_on="FPS_ID")
 fps_stock["At_Risk"]=fps_stock.Stock_Level_tons<=fps_stock.Reorder_Threshold_tons
 total_plan    = day_totals_lg.Quantity_tons.sum()

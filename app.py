@@ -180,7 +180,7 @@ with tabs[3]:
     fps_df = dispatch_lg[mask]
     report = (fps_df.groupby("FPS_ID")
         .agg(Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-             Trips_Count=pd.NamedAgg("Vehicle_ID","nunique"),
+             Trips_Count=pd.NamedAgg("Vehicle_ID","count"),
              Vehicle_IDs=pd.NamedAgg("Vehicle_ID",lambda vs: ",".join(map(str,sorted(set(vs))))))
         .reset_index()
         .merge(fps[["FPS_ID","FPS_Name"]],on="FPS_ID",how="left")

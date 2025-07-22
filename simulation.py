@@ -87,7 +87,6 @@ else:
 # ————————————————————————————————
 # 5. Simulation entry point
 # ————————————————————————————————
-from simulation import run_simulation  # your algorithm module
 
 dispatch_cg  = pd.DataFrame()
 dispatch_lg  = pd.DataFrame()

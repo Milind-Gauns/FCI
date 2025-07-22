@@ -1,143 +1,194 @@
-import streamlit as st 
+# simulation.py
+
 import pandas as pd
-import plotly.express as px
-from io import BytesIO
 import math
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 
-# ————————————————————————————————
-# 1. Page config
-# ————————————————————————————————
-st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")
-
-# ————————————————————————————————
-# 2. Helper to export DataFrame to Excel
-# ————————————————————————————————
-def to_excel(df: pd.DataFrame) -> bytes:
-    buf = BytesIO()
-    df.to_excel(buf, index=False)
-    return buf.getvalue()
-
-# ————————————————————————————————
-# 3. Load & cache defaults (resilient to missing Vehicles sheet)
-# ————————————————————————————————
-DEFAULT_FILE = "distribution_dashboard_template.xlsx"
-
-@st.cache_data
-def load_defaults():
-    xlsx = pd.ExcelFile(DEFAULT_FILE)
-    settings    = pd.read_excel(xlsx, sheet_name="Settings")
-    default_lgs = pd.read_excel(xlsx, sheet_name="LGs")
-    default_fps = pd.read_excel(xlsx, sheet_name="FPS")
-    # If Vehicles sheet exists, load it; otherwise create empty skeleton
-    if "Vehicles" in xlsx.sheet_names:
-        default_veh = pd.read_excel(xlsx, sheet_name="Vehicles")
-    else:
-        default_veh = pd.DataFrame(columns=["Vehicle_ID","Capacity_tons","Mapped_LG_IDs"])
-    return settings, default_lgs, default_fps, default_veh
-
-settings, default_lgs, default_fps, default_veh = load_defaults()
-
-# ————————————————————————————————
-# 4. Upload / Download Master Data
-# ————————————————————————————————
-st.sidebar.subheader("📁 Edit Master Data")
-
-def make_excel(dfs: dict) -> bytes:
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        for name, df in dfs.items():
-            df.to_excel(writer, sheet_name=name, index=False)
-    return buf.getvalue()
-
-# LGs
-st.sidebar.markdown("**LGs**")
-xls_lg = make_excel({"LGs": default_lgs})
-st.sidebar.download_button("Download LGs", xls_lg, "LGs.xlsx", 
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-up = st.sidebar.file_uploader("Upload LGs", type=["xlsx","csv"], key="lg_upload")
-if up:
-    lgs = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up, sheet_name="LGs")
-else:
-    lgs = default_lgs.copy()
-
-# FPS
-st.sidebar.markdown("**FPS**")
-xls_fps = make_excel({"FPS": default_fps})
-st.sidebar.download_button("Download FPS", xls_fps, "FPS.xlsx", 
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-up = st.sidebar.file_uploader("Upload FPS", type=["xlsx","csv"], key="fps_upload")
-if up:
-    fps = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up, sheet_name="FPS")
-else:
-    fps = default_fps.copy()
-
-# Vehicles
-st.sidebar.markdown("**Vehicles**")
-xls_veh = make_excel({"Vehicles": default_veh})
-st.sidebar.download_button("Download Vehicles", xls_veh, "Vehicles.xlsx", 
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-up = st.sidebar.file_uploader("Upload Vehicles", type=["xlsx","csv"], key="veh_upload")
-if up:
-    vehicles = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up, sheet_name="Vehicles")
-else:
-    vehicles = default_veh.copy()
-
-# ————————————————————————————————
-# 5. Simulation entry point
-# ————————————————————————————————
-
-dispatch_cg  = pd.DataFrame()
-dispatch_lg  = pd.DataFrame()
-stock_levels = pd.DataFrame()
-
-if st.sidebar.button("▶️ Run Simulation"):
-    with st.spinner("Running simulation…"):
-        dispatch_cg, dispatch_lg, stock_levels = run_simulation(
-            settings, lgs, fps, vehicles
-        )
-    st.sidebar.success("Simulation complete!")
-else:
-    st.sidebar.info("Upload masters and click ▶️ to run.")
-
-# Fallback: if not yet run, load static defaults
-if dispatch_lg.empty:
-    dispatch_cg  = pd.read_excel(DEFAULT_FILE, sheet_name="CG_to_LG_Dispatch")
-    dispatch_lg  = pd.read_excel(DEFAULT_FILE, sheet_name="LG_to_FPS_Dispatch")
-    stock_levels = pd.read_excel(DEFAULT_FILE, sheet_name="Stock_Levels")
-
-# ————————————————————————————————
-# 6. Dashboard logic
-# ————————————————————————————————
-# (Insert your existing code here unmodified, referencing
-#  dispatch_cg, dispatch_lg, stock_levels, lgs, fps, etc.)
+# === CONFIG ===
+DEFAULT_FILE      = "distribution_dashboard_template.xlsx"
+NUM_CG_VEHICLES   = 30
+CG_VEHICLE_CAP    = 11.5
+CG_TOTAL_DAYS     = 30
+CG_MAX_PRE_DAYS   = 30
 
 def run_simulation(settings, lgs, fps, vehicles):
-    import pandas as pd
+    """
+    Runs both phases:
+      1) CG→LG pre‑dispatch to meet LG daily requirements
+      2) LG→FPS dynamic dispatch on rolling threshold logic
 
-    # Dummy CG to LG dispatch
-    dispatch_cg = pd.DataFrame({
-        "Dispatch_Day": [1, 2, 3],
-        "LG_ID": [101, 102, 101],
-        "Quantity_tons": [50.0, 60.0, 40.0]
-    })
+    Returns:
+      dispatch_cg_df    (CG → LG schedule)
+      dispatch_lg_df    (LG → FPS schedule)
+      stock_levels_df   (end‑of‑day stocks for LG & FPS)
+    """
+    # --- PHASE 1: CG → LG Pre‑dispatch ---
+    # Read LG daily requirements & capacities from the same Excel
+    req = pd.read_excel(DEFAULT_FILE, sheet_name="LG_Daily_Req").fillna(0)
+    cap_df = pd.read_excel(DEFAULT_FILE, sheet_name="LG_Capacity")
+    capacity = dict(zip(cap_df['LG_ID'], cap_df['Capacity_tons']))
 
-    # Dummy LG to FPS dispatch
-    dispatch_lg = pd.DataFrame({
-        "Day": [1, 2, 3],
-        "LG_ID": [101, 101, 102],
-        "FPS_ID": [201, 202, 203],
-        "Vehicle_ID": [1, 2, 3],
-        "Quantity_tons": [10.0, 15.0, 20.0]
-    })
+    # Pivot for lookups
+    req_pivot = req.pivot_table(
+        index='LG_ID', columns='Day', values='Daily_Requirement_tons',
+        aggfunc='sum', fill_value=0
+    )
 
-    # Dummy stock levels
-    stock_levels = pd.DataFrame({
-        "Day": [1, 2, 3, 1, 2, 3],
-        "Entity_ID": [101, 101, 101, 201, 201, 201],
-        "Entity Type": ["LG", "LG", "LG", "FPS", "FPS", "FPS"],
-        "Stock_Level_tons": [100.0, 80.0, 70.0, 15.0, 10.0, 5.0]
-    })
+    def free_room(stock, lg):
+        return max(0.0, capacity[lg] - stock[lg])
 
-    return dispatch_cg, dispatch_lg, stock_levels
+    # Check feasibility and compute minimum pre‑days
+    def can_meet_all(pre_days):
+        start = 1 - pre_days
+        stock = {lg: 0.0 for lg in req_pivot.index}
+        for day in range(start, CG_TOTAL_DAYS + 1):
+            trips = NUM_CG_VEHICLES
+            if day >= 1:
+                for lg in stock:
+                    need = max(0, req_pivot.at[lg, day] - stock[lg])
+                    room = free_room(stock, lg)
+                    deliver = min(need, room)
+                    t_used = min(trips, math.ceil(deliver/CG_VEHICLE_CAP))
+                    stock[lg] += t_used * CG_VEHICLE_CAP
+                    trips -= t_used
+                    if stock[lg] + 1e-6 < req_pivot.at[lg, day]:
+                        return False
+            # pre‑stock round robin
+            if trips>0:
+                future = {
+                    lg: max(0, sum(req_pivot.at[lg,d] 
+                                   for d in range(max(1,day+1),CG_TOTAL_DAYS+1))
+                           - stock[lg])
+                    for lg in stock
+                }
+                cand = [lg for lg,fu in future.items() if fu>1e-6 and free_room(stock,lg)>1e-6]
+                idx=0
+                while trips>0 and cand:
+                    lg=cand[idx%len(cand)]
+                    rem=free_room(stock,lg)
+                    dl=min(CQ_VEHICLE_CAP := CG_VEHICLE_CAP, future[lg], rem)
+                    if dl>1e-6:
+                        stock[lg]+=CG_VEHICLE_CAP
+                        future[lg]=max(0,future[lg]-CG_VEHICLE_CAP)
+                        trips-=1
+                    if future[lg]<1e-6 or free_room(stock,lg)<1e-6:
+                        cand.remove(lg); idx-=1
+                    idx+=1
+            if day>=1:
+                for lg in stock:
+                    stock[lg]=max(0, stock[lg]-req_pivot.at[lg,day])
+        return True
+
+    for x in range(CG_MAX_PRE_DAYS+1):
+        if can_meet_all(x):
+            pre_days=x
+            break
+    else:
+        raise RuntimeError("Cannot meet LG demand within pre‑days limit")
+    start_day = 1 - pre_days
+
+    # Build CG→LG dispatch
+    stock = {lg:0.0 for lg in req_pivot.index}
+    cg_records=[]
+    for day in range(start_day, CG_TOTAL_DAYS+1):
+        trips=NUM_CG_VEHICLES
+        vids=list(range(1,NUM_CG_VEHICLES+1))
+        # serve today
+        if day>=1:
+            for lg in sorted(req_pivot.index, key=lambda l: -(req_pivot.at[l,day]-stock[l])):
+                need=max(0, req_pivot.at[lg,day]-stock[lg])
+                room=free_room(stock,lg)
+                dl=min(need,room)
+                while trips>0 and dl>1e-6:
+                    vid=vids.pop(0)
+                    qty=min(dl,CG_VEHICLE_CAP)
+                    cg_records.append({'Day':day,'Vehicle_ID':vid,'LG_ID':lg,'Quantity_tons':qty})
+                    stock[lg]+=qty; trips-=1; dl-=qty
+                if trips==0: break
+        # pre‑stock
+        if trips>0:
+            future={lg:max(0,sum(req_pivot.at[lg,d] for d in range(max(1,day+1),CG_TOTAL_DAYS+1))-stock[lg]) for lg in stock}
+            cand=[lg for lg,fu in future.items() if fu>1e-6 and free_room(stock,lg)>1e-6]
+            idx=0
+            while trips>0 and cand:
+                lg=cand[idx%len(cand)]
+                dl=min(CQ_VEHICLE_CAP := CG_VEHICLE_CAP, future[lg], free_room(stock,lg))
+                if dl>1e-6:
+                    vid=vids.pop(0)
+                    qty=min(dl,CG_VEHICLE_CAP)
+                    cg_records.append({'Day':day,'Vehicle_ID':vid,'LG_ID':lg,'Quantity_tons':qty})
+                    stock[lg]+=qty; trips-=1; future[lg]=future[lg]-qty
+                if future[lg]<1e-6 or free_room(stock,lg)<1e-6:
+                    cand.remove(lg); idx-=1
+                idx+=1
+        # consume
+        if day>=1:
+            for lg in stock:
+                stock[lg]=max(0, stock[lg]-req_pivot.at[lg,day])
+
+    dispatch_cg_df = pd.DataFrame(cg_records)
+
+    # === PHASE 2: LG → FPS ===
+    # Compute thresholds
+    fps2 = fps.copy()
+    fps2["Daily_Demand_tons"] = fps2["Monthly_Demand_tons"]/30.0
+    default_lead = float(settings.query("Parameter=='Default_Lead_Time_days'")["Value"].iloc[0])
+    fps2["Lead_Time_days"]=fps2["Lead_Time_days"].fillna(default_lead)
+    fps2["Reorder_Threshold_tons"]=fps2["Daily_Demand_tons"]*fps2["Lead_Time_days"]
+
+    # map LG_ID if needed
+    name_to_id = {n.strip().lower():i for n,i in zip(lgs["LG_Name"],lgs["LG_ID"])}
+    if "Linked_LG_ID" in fps2.columns:
+        fps2["LG_ID"]=fps2["Linked_LG_ID"].str.lower().map(name_to_id)
+
+    lg_stock2=dict(zip(lgs["LG_ID"], lgs["Initial_Allocation_tons"]))
+    fps_stock2={fid:0.0 for fid in fps2["FPS_ID"]}
+
+    # vehicle mapping
+    veh=vehicles.copy()
+    if "Mapped_LG_IDs" in veh.columns:
+        veh["Mapped_LGs_List"]=veh["Mapped_LG_IDs"].apply(lambda s:[int(x) for x in str(s).split(",") if x.strip().isdigit()])
+    else:
+        veh["Mapped_LGs_List"]=[list(lgs["LG_ID"]) for _ in veh.index]
+    veh["Capacity"]=veh.get("Capacity_tons",CG_VEHICLE_CAP).fillna(CG_VEHICLE_CAP)
+
+    lgp_records=[]; stock_records=[]
+    for day in range(1, CG_TOTAL_DAYS+1):
+        # consume fps
+        for _,r in fps2.iterrows():
+            fid=r["FPS_ID"]
+            fps_stock2[fid]=max(0, fps_stock2[fid]-r["Daily_Demand_tons"])
+        # needs
+        needs=[]
+        for _,r in fps2.iterrows():
+            fid,lgid=r["FPS_ID"],int(r["LG_ID"])
+            cur,thr=fps_stock2[fid],r["Reorder_Threshold_tons"]
+            if cur<=thr:
+                avail=lg_stock2.get(lgid,0.0)
+                capleft=r["Max_Capacity_tons"]-cur
+                qty=min(avail,capleft)
+                if qty>0:
+                    urg=(thr-cur)/r["Daily_Demand_tons"]
+                    needs.append((urg,fid,lgid,qty))
+        needs.sort(reverse=True,key=lambda x:x[0])
+        veh["Trips_Used"]=0
+        for _,fid,lgid,need in needs:
+            cand=veh[veh["Mapped_LGs_List"].apply(lambda lst:lgid in lst)]
+            cand=cand[cand["Trips_Used"]<settings.query("Parameter=='Max_Trips_Per_Vehicle_Per_Day'")["Value"].iloc[0]]
+            if cand.empty: continue
+            shared=cand[cand["Mapped_LGs_List"].apply(len)>1]
+            truck=shared.iloc[0] if not shared.empty else cand.iloc[0]
+            vid,capv=truck["Vehicle_ID"],truck["Capacity"]
+            send=min(capv,need,lg_stock2[lgid])
+            if send<=0: continue
+            lgp_records.append({"Day":day,"Vehicle_ID":vid,"LG_ID":lgid,"FPS_ID":fid,"Quantity_tons":send})
+            lg_stock2[lgid]-=send; fps_stock2[fid]+=send
+            veh.loc[veh.Vehicle_ID==vid,"Trips_Used"]+=1
+        for lgid,st in lg_stock2.items():
+            stock_records.append({"Day":day,"Entity_Type":"LG","Entity_ID":lgid,"Stock_Level_tons":st})
+        for fid,st in fps_stock2.items():
+            stock_records.append({"Day":day,"Entity_Type":"FPS","Entity_ID":fid,"Stock_Level_tons":st})
+
+    dispatch_lg_df=pd.DataFrame(lgp_records)
+    stock_levels_df=pd.DataFrame(stock_records)
+
+    return dispatch_cg_df, dispatch_lg_df, stock_levels_df

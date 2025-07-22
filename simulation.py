@@ -113,3 +113,31 @@ if dispatch_lg.empty:
 # (Insert your existing code here unmodified, referencing
 #  dispatch_cg, dispatch_lg, stock_levels, lgs, fps, etc.)
 
+def run_simulation(settings, lgs, fps, vehicles):
+    import pandas as pd
+
+    # Dummy CG to LG dispatch
+    dispatch_cg = pd.DataFrame({
+        "Dispatch_Day": [1, 2, 3],
+        "LG_ID": [101, 102, 101],
+        "Quantity_tons": [50.0, 60.0, 40.0]
+    })
+
+    # Dummy LG to FPS dispatch
+    dispatch_lg = pd.DataFrame({
+        "Day": [1, 2, 3],
+        "LG_ID": [101, 101, 102],
+        "FPS_ID": [201, 202, 203],
+        "Vehicle_ID": [1, 2, 3],
+        "Quantity_tons": [10.0, 15.0, 20.0]
+    })
+
+    # Dummy stock levels
+    stock_levels = pd.DataFrame({
+        "Day": [1, 2, 3, 1, 2, 3],
+        "Entity_ID": [101, 101, 101, 201, 201, 201],
+        "Entity Type": ["LG", "LG", "LG", "FPS", "FPS", "FPS"],
+        "Stock_Level_tons": [100.0, 80.0, 70.0, 15.0, 10.0, 5.0]
+    })
+
+    return dispatch_cg, dispatch_lg, stock_levels

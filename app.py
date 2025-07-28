@@ -15,7 +15,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 # Import the consolidated simulation routine
-from simulation import run_simulation
+from simulation_py import run_simulation
 
 # 1. Page config
 st.set_page_config(page_title="Grain Distribution Dashboard", layout="wide")

@@ -4,10 +4,15 @@ import plotly.express as px
 from io import BytesIO
 import math
 import matplotlib.pyplot as plt
+
 import os, sys
+
+# ensure the folder containing app.py is on Python's import path
+sys.path.append(os.path.dirname(__file__))
+
+from simulation import run_simulation
 from matplotlib.backends.backend_pdf import PdfPages
 
-sys.path.append(os.path.dirname(__file__))
 
 # Import the consolidated simulation routine
 from simulation import run_simulation

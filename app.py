@@ -35,7 +35,7 @@ uploaded = st.sidebar.file_uploader(
 )
 
 # 4. Run simulation on uploaded file or default template
-input_src = uploaded if uploaded is not None else "raw_distribution_input_template.xlsx"
+input_src = uploaded if uploaded is not None else "distribution_dashboard_template.xlsx"
 settings, dispatch_cg, dispatch_lg, stock_levels, lgs, fps = run_simulation(input_src)
 
 # 5. Compute core metrics
